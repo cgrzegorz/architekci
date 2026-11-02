@@ -1,61 +1,34 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { formatDate } from '../analysis.js'
+import DataGrid from './DataGrid.jsx'
+import { Empty } from './ui.jsx'
 
-export default function Wnioski({ wnioski, onSelect, pokazPowiat }) {
-  const [q, setQ] = useState('')
-  const [bezEl, setBezEl] = useState(false)
-  const [stan, setStan] = useState('')
-  const stany = [...new Set(wnioski.map((w) => w.stan).filter(Boolean))]
+const elektryk = (w) => w.elektryk_pewny || w.elektryk_prawdopodobny || (w.zespol_status === 'nieznany' ? 'nie wiadomo' : 'brak')
 
-  const rows = useMemo(() => {
-    const ql = q.trim().toLowerCase()
-    return wnioski
-      .filter((w) => !bezEl || (!w.elektryk_pewny && !w.elektryk_prawdopodobny))
-      .filter((w) => !stan || w.stan === stan)
-      .filter((w) => !ql || [w.projektant, w.miejscowosc, w.zamierzenie, w.nr_wniosku, w.zespol_zapis].some((s) => s && String(s).toLowerCase().includes(ql)))
-      .sort((a, b) => (a.data_zlozenia < b.data_zlozenia ? 1 : -1))
-  }, [wnioski, q, bezEl, stan])
+export default function Wnioski({ wnioski, onSelect }) {
+  const rows = useMemo(() => [...wnioski].sort((a, b) => (a.data_zlozenia < b.data_zlozenia ? 1 : -1)), [wnioski])
 
-  return (
-    <div className="card">
-      <div className="toolbar">
-        <input placeholder="Szukaj: projektant, miejscowość, zamierzenie, zespół…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select value={stan} onChange={(e) => setStan(e.target.value)}>
-          <option value="">Każdy stan</option>
-          {stany.map((s) => (<option key={s}>{s}</option>))}
-        </select>
-        <label className="check"><input type="checkbox" checked={bezEl} onChange={(e) => setBezEl(e.target.checked)} /> tylko bez elektryka</label>
-        <span className="muted small">{rows.length} wniosków</span>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {pokazPowiat && <th>Powiat</th>}<th>Złożony</th><th>Nr</th><th>Stan</th><th>Miejscowość</th><th className="num">m³</th>
-              <th>Zamierzenie</th><th>Projektant</th><th>Elektryk</th><th>Zespół</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((w) => (
-              <tr key={w.gunb_id}>
-                {pokazPowiat && <td className="small">{w.powiat}</td>}
-                <td className="nowrap">{formatDate(w.data_zlozenia)}</td>
-                <td className="small nowrap">{w.nr_wniosku}</td>
-                <td className="small">{w.stan}</td>
-                <td>{w.miejscowosc}</td>
-                <td className="num">{w.kubatura_m3}</td>
-                <td className="small clip">{w.rodzaj_zamierzenia}: {w.zamierzenie}</td>
-                <td><button className="link" onClick={() => onSelect(w.projektant)}>{w.projektant}</button></td>
-                <td className="small">
-                  {w.elektryk_pewny || (w.elektryk_prawdopodobny && <>{w.elektryk_prawdopodobny} <span className="muted">(prawdop.)</span></>) || <b className="free">brak</b>}
-                </td>
-                <td className="small clip muted">{w.zespol_zapis}</td>
-                <td><a href={w.link} target="_blank" rel="noreferrer">↗</a></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+  const columns = useMemo(
+    () => [
+      { key: 'data', label: 'Złożony', filter: 'date', width: 110, firstDir: 'desc', get: (w) => w.data_zlozenia, render: (w) => formatDate(w.data_zlozenia) },
+      { key: 'powiat', label: 'Powiat', filter: 'enum', width: 110, get: (w) => w.powiat },
+      { key: 'nr', label: 'Nr wniosku', filter: 'text', width: 140, get: (w) => w.nr_wniosku, render: (w) => <span className="text-xs">{w.nr_wniosku}</span> },
+      { key: 'stan', label: 'Stan', filter: 'enum', width: 150, get: (w) => w.stan, render: (w) => <span className="text-xs">{w.stan}</span> },
+      { key: 'miejscowosc', label: 'Miejscowość', filter: 'enum', width: 140, get: (w) => w.miejscowosc },
+      { key: 'rodzaj', label: 'Rodzaj', filter: 'enum', width: 110, get: (w) => w.rodzaj_zamierzenia },
+      { key: 'kubatura', label: 'm³', filter: 'number', num: true, width: 80, firstDir: 'desc', get: (w) => w.kubatura_m3 },
+      { key: 'zamierzenie', label: 'Zamierzenie', filter: 'text', width: 280, wrap: true, get: (w) => w.zamierzenie, render: (w) => <span className="line-clamp-2 text-xs">{w.zamierzenie}</span> },
+      { key: 'projektant', label: 'Projektant', filter: 'text', width: 170, get: (w) => w.projektant, render: (w) => <span className="font-semibold text-slate-900">{w.projektant}</span> },
+      {
+        key: 'elektryk', label: 'Elektryk', filter: 'enum', width: 160, get: elektryk,
+        render: (w) =>
+          w.elektryk_pewny || (w.elektryk_prawdopodobny && <>{w.elektryk_prawdopodobny} <span className="text-slate-400">(prawdop.)</span></>) || (w.zespol_status === 'nieznany' ? <span className="text-violet-600" title="urząd nie wpisał branżystów">nie wiadomo</span> : <b className="text-hot">brak</b>),
+      },
+      { key: 'zespol', label: 'Zespół', filter: 'text', width: 240, wrap: true, hidden: true, get: (w) => w.zespol_zapis, render: (w) => <span className="line-clamp-2 text-xs text-slate-500">{w.zespol_zapis}</span> },
+      { key: 'link', label: 'GUNB', stop: true, get: (w) => w.link, render: (w) => (w.link ? <a href={w.link} target="_blank" rel="noreferrer">↗</a> : <Empty />) },
+    ],
+    [],
   )
+
+  return <DataGrid columns={columns} rows={rows} rowKey={(w) => w.gunb_id} onRowClick={(w) => onSelect(w.projektant)} noun="wniosków" footer="Kliknij wiersz, żeby zobaczyć architekta i wszystkie jego projekty." />
 }

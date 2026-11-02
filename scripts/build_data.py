@@ -3,10 +3,16 @@
   2) data/powiaty/gunb_*.md         – surowe pliki od agenta, po jednym na powiat
 
 Wnioski z plików .md są dopisywane, jeśli ich gunb_id nie ma jeszcze w bazie (xlsx ma pierwszeństwo).
-Dla nich skrypt sam wyznacza:
-  - projektant          – ujednolicone imię i nazwisko (dopasowanie do znanych osób po nr uprawnień / nazwisku)
-  - elektryk_pewny      – osoba z zespołu z uprawnieniami elektrycznymi (kod …E/ w numerze lub opis specjalności)
-  - elektryk_prawdopodobny – znany z bazy elektryk ze starymi uprawnieniami (instalacyjno-inżynieryjne)
+Projektant z .md jest ujednolicany (dopasowanie do znanych osób po nr uprawnień / nazwisku).
+
+Elektryk w zespole jest wyznaczany WYŁĄCZNIE z zapisu zespołu w GUNB (ręczne kolumny i role z xlsx są ignorowane):
+  1. kod specjalności w nowych uprawnieniach: …/PWBE/…, …/POOE/… = elektryczna, …S/ = sanitarna, …K/ = konstrukcyjna,
+  2. opis specjalności w zapisie („…elektrycznych”, „…sieci sanitarnych”, „konstrukcyjno-budowlana”),
+  3. eliminacja dla starych uprawnień (np. „955/91”): zespół domu to zwykle konstruktor + sanitarny + elektryk.
+     Dla każdego wniosku liczymy, której z tych ról brakuje po odjęciu osób o znanej specjalności, i zbieramy
+     „głosy” dla osoby bez kodu. Kto w większości swoich zespołów (≥ 60% głosów) zajmuje miejsce elektryka,
+     jest elektrykiem „wywnioskowanym” (elektryk_prawdopodobny). Kilka przebiegów – wnioski z jednego zespołu
+     pomagają rozpoznać osoby w kolejnych.
 
 Użycie: python3 -I scripts/build_data.py [--check]
   --check  porównuje automatyczne wyznaczanie elektryków z ręcznym opisem w xlsx (test parsera)
@@ -19,6 +25,7 @@ from xlsx2json import read_xlsx  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]  # katalog repozytorium
 XLSX = ROOT / 'data' / 'baza_zlecenia.xlsx'
+KONTAKTY = ROOT / 'data' / 'kontakty.csv'  # ręcznie/agentem zebrane kontakty do projektantów (separator ;)
 MD_DIR = Path(os.environ.get('POWIATY_DIR', ROOT / 'data' / 'powiaty'))
 OUT = Path(os.environ.get('BAZA_OUT', Path(__file__).resolve().parents[1] / 'src' / 'data' / 'baza.json'))
 
@@ -39,7 +46,8 @@ def name_key(name):
 
 
 def upr_key(nr):
-    return re.sub(r'[^0-9a-z]', '', fold(nr or ''))
+    nr = re.sub(r'^\s*(upr\w*\.?\s*)?(nr\.?\s*)?', '', fold(nr or ''))  # „upr. nr B.P.IV-…” = „B.P.IV-…”
+    return re.sub(r'[^0-9a-z]', '', nr)
 
 
 # Kod specjalności w nowych uprawnieniach: LOD/4121/PWBE/19, KUP/0090/POE/20, DOŚ/0478/PBE/19 …
@@ -67,25 +75,77 @@ def split_people(zespol):
     return chunks
 
 
+# Format „opisowy” (tabela z polskimi nagłówkami, np. gunb_wieruszowski.md) – kolumny rozpoznawane po nazwie
+HDR_MAP = {
+    'nr wniosku': 'nr_wniosku', 'stan': 'stan', 'data zlozenia': 'data_zlozenia', 'data decyzji': 'data_decyzji',
+    'miejscowosc': 'miejscowosc', 'kubatura': 'kubatura_m3', 'kubatura m3': 'kubatura_m3', 'zamierzenie': 'zamierzenie',
+    'glowny projektant': 'projektant_zapis', 'projektant': 'projektant_zapis', 'nr uprawnien': 'nr_uprawnien',
+    'pozostali projektanci': 'zespol_zapis', 'link': 'link', 'rodzaj obiektu': 'rodzaj_obiektu',
+}
+RODZAJ = [('rozbudow', 'rozbudowa'), ('nadbudow', 'nadbudowa'), ('budowa nowego', 'budowa'), ('przebudow', 'przebudowa')]
+RE_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+
+
+def header_key(cell):
+    return re.sub(r'[^a-z0-9 ]', '', fold(cell)).strip()
+
+
+def row_from_named(r):
+    """Ujednolica wiersz z tabeli opisowej do pól MD_COLS."""
+    r = {k: (None if v is None or fold(v) in ('', 'brak', '-', '- -', '—') else v) for k, v in r.items()}
+    if r.get('link'):
+        m = RE_UUID.search(r['link'])
+        r['gunb_id'] = m.group(0) if m else None
+    if r.get('miejscowosc'):
+        m = re.match(r'^(.*?)\s*\((\d{2}-\d{3})\)\s*$', r['miejscowosc'])
+        if m:
+            r['miejscowosc'], r['kod_pocztowy'] = m.group(1), m.group(2)
+    if r.get('zamierzenie'):
+        m = re.match(r'^(.*)\s*\(([^()]*obiekt[^()]*|wykonanie robót[^()]*)\)\s*$', r['zamierzenie'])
+        if m:
+            r['zamierzenie'] = m.group(1).strip()
+            low = fold(m.group(2))
+            r['rodzaj_zamierzenia'] = next((v for k, v in RODZAJ if k in low), 'inne')
+    if r.get('nr_wniosku'):
+        r['nr_wniosku'] = re.sub(r'^As\.', 'AS.', r['nr_wniosku'])
+    return r
+
+
 def load_md(path):
+    """Czyta plik od agenta. Obsługuje dwa formaty:
+    a) tabela z kolumnami MD_COLS (gunb_id | powiat | …),
+    b) opisowy: sekcja „Tabela wniosków” z polskimi nagłówkami (Nr wniosku, Stan, …, Link) oraz
+       opcjonalna tabela „Wnioski pominięte”; pozostałe tabele (zestawienia) są pomijane."""
     meta = {'plik': path.name, 'pominiete': []}
     rows, warnings = [], []
     lines = path.read_text(encoding='utf-8').splitlines()
     in_skipped = False
+    section = ''        # fold() ostatniego nagłówka „## …”
+    header = None       # lista pól dla bieżącej tabeli opisowej (None = format MD_COLS albo tabela ignorowana)
+    table_kind = None   # 'cols' | 'named' | 'skipped' | 'ignore'
     for ln in lines:
         s = ln.strip()
         low = fold(s)
         if not s.startswith('|'):
-            if 'zakres' in low and re.search(r'\d{4}-\d{2}-\d{2}', s):
+            table_kind = None
+            if s.startswith('#'):
+                section = low
+                m = re.search(r'powiat\s+([a-ząćęłńóśźż]+)', s, re.I)
+                if s.startswith('# ') and m and not meta.get('powiat'):
+                    meta['powiat'] = m.group(1).lower()
+            if 'zakres' in low and re.search(r'\d{4}-\d{2}-\d{2}', s) and 'zakres_od' not in meta:
                 d = re.findall(r'\d{4}-\d{2}-\d{2}', s)
-                meta['zakres_od'], meta['zakres_do'] = d[0], d[-1]
+                meta['zakres_od'], meta['zakres_do'] = d[0], (d[1] if len(d) > 1 else d[0])
             elif 'data pobrania' in low or 'pobrano' in low:
                 d = re.findall(r'\d{4}-\d{2}-\d{2}', s)
                 if d:
                     meta['data_pobrania'] = d[0]
-            elif 'liczba' in low and re.search(r'\d+', s):
+            elif re.match(r'^\W*liczba', low) and re.search(r'\d+', s):
                 meta['liczba_deklarowana'] = int(re.search(r'\d+', s.split(':')[-1] or s).group())
-            if 'pomini' in low:
+            if s.startswith('#'):
+                in_skipped = False
+                continue
+            if 'pomini' in low and not s.startswith('-'):
                 in_skipped = True
                 rest = s.split(':', 1)[1].strip() if ':' in s else ''
                 if rest and fold(rest) not in ('brak', 'brak.', '-', 'nie', '0'):
@@ -97,16 +157,49 @@ def load_md(path):
                 in_skipped = False
             continue
         cells = [c.strip() for c in s.strip('|').split('|')]
-        if cells[0] in ('gunb_id',) or set(s) <= set('|-: '):
+        if set(s) <= set('|-: '):
             continue
-        if len(cells) != len(MD_COLS):
-            warnings.append(f'{path.name}: wiersz ma {len(cells)} kolumn zamiast {len(MD_COLS)} – pominięty: {s[:80]}…')
+        if table_kind is None:  # pierwszy wiersz tabeli = nagłówek
+            keys = [header_key(c) for c in cells]
+            if cells[0] == 'gunb_id':
+                table_kind = 'cols'
+                continue
+            if 'link' in keys and 'nr wniosku' in keys:
+                header = [HDR_MAP.get(k) for k in keys]
+                table_kind = 'skipped' if 'pomini' in section else 'named'
+                continue
+            if keys and keys[0] in ('czesc',):
+                table_kind = 'ignore'  # tabela podsumowania zakresu – bierzemy z niej tylko „razem”
+                continue
+            if 'gunb_id' not in s and len(cells) != len(MD_COLS):
+                table_kind = 'ignore'
+                continue
+            table_kind = 'cols'  # tabela MD_COLS bez nagłówka
+        if table_kind == 'ignore':
+            if fold(cells[0]) == 'razem':
+                m = re.search(r'\*\*(\d+)\*\*', cells[-1]) or re.search(r'\d+', cells[-1])
+                if m:
+                    meta['liczba_deklarowana'] = int(m.group(1) if m.re.groups else m.group(0))
             continue
-        r = {k: (v if v not in ('', '—', '-') else None) for k, v in zip(MD_COLS, cells)}
+        if table_kind in ('named', 'skipped'):
+            if len(cells) != len(header):
+                warnings.append(f'{path.name}: wiersz ma {len(cells)} kolumn zamiast {len(header)} – pominięty: {s[:80]}…')
+                continue
+            r = row_from_named({k: v for k, v in zip(header, cells) if k})
+            if table_kind == 'skipped':
+                opis = ' – '.join(x for x in (r.get('nr_wniosku'), r.get('rodzaj_obiektu'), r.get('zamierzenie')) if x)
+                meta['pominiete'].append(opis + (f" ({r['projektant_zapis']})" if r.get('projektant_zapis') else ''))
+                continue
+            r = {k: r.get(k) for k in MD_COLS}
+        else:
+            if len(cells) != len(MD_COLS):
+                warnings.append(f'{path.name}: wiersz ma {len(cells)} kolumn zamiast {len(MD_COLS)} – pominięty: {s[:80]}…')
+                continue
+            r = {k: (v if v not in ('', '—', '-') else None) for k, v in zip(MD_COLS, cells)}
         if not r['gunb_id']:
             continue
         r['gunb_id'] = r['gunb_id'].strip('/')
-        if r['kubatura_m3']:
+        if r['kubatura_m3'] and isinstance(r['kubatura_m3'], str):
             try:
                 r['kubatura_m3'] = float(r['kubatura_m3'].replace(',', '.').replace(' ', ''))
                 if r['kubatura_m3'].is_integer():
@@ -127,14 +220,10 @@ class People:
                 self.by_name.setdefault(name_key(w['projektant']), w['projektant'])
                 if w.get('nr_uprawnien'):
                     self.by_upr.setdefault(upr_key(w['nr_uprawnien']), w['projektant'])
-        self.el_pewni, self.el_prawdop = {}, {}
-        for o in osoby:
+        for o in osoby:  # tylko do ujednolicenia zapisu nazwisk
             n = o.get('imie_nazwisko')
-            if not n:
-                continue
-            self.by_name.setdefault(name_key(n), n)
-            if o.get('rola') == 'elektryk':
-                (self.el_pewni if o.get('pewnosc_specjalnosci') == 'pewne' else self.el_prawdop)[name_key(n)] = n
+            if n:
+                self.by_name.setdefault(name_key(n), n)
 
     def canonical(self, name, upr=None):
         if upr and upr_key(upr) in self.by_upr:
@@ -143,23 +232,154 @@ class People:
         if k in self.by_name:
             return self.by_name[k]
         # nieznana osoba: zapis „Nazwisko Imię” zostawiamy jak jest, ale rejestrujemy, żeby kolejne zapisy się łączyły
-        clean = re.sub(r'\s+', ' ', re.sub(r'(mgr|inż\.?|arch\.?|dr|,)', ' ', name or '', flags=re.I)).strip()
+        clean = re.sub(r'\s+', ' ', re.sub(r'(?<!\w)(mgr|inż|arch|dr|tech|bud)\.?(?!\w)|,', ' ', name or '', flags=re.I)).strip()
         self.by_name[k] = clean
         if upr:
             self.by_upr[upr_key(upr)] = clean
         return clean
 
-    def electricians(self, zespol):
-        pewny = prawdop = None
-        for name, chunk in split_people(zespol):
+
+
+# --- specjalności w zespole: kod uprawnień → opis → eliminacja ---------------------------------------
+
+RE_CODE = re.compile(r'\b[A-ZĄĆĘŁŃÓŚŹŻ]{2,4}\s*/\s*\d{2,5}\s*/\s*([A-Za-z]{2,6})\s*/\s*\d{2}\b')
+ROLE_TXT = [
+    ('E', re.compile(r'elektry|elektroenerget', re.I)),
+    ('S', re.compile(r'sanitar|ciepln|wentyl|gazow|wodoci|kanaliz', re.I)),
+    ('K', re.compile(r'konstrukc', re.I)),
+]
+RE_INST_INZ = re.compile(r'instalacyjno\s*-?\s*in[zż]ynieryjn', re.I)  # stara specjalność: sanitarna LUB elektryczna
+ROLES = ('K', 'S', 'E')
+PROG_ELIMINACJI = 0.6
+
+
+def code_role(token):
+    t = token.upper()
+    if t.endswith('KB') or t.endswith('K'):
+        return 'K'
+    for r in ('S', 'E', 'A'):
+        if t.endswith(r):
+            return r
+    return None
+
+
+def chunk_role(chunk):
+    """Rola osoby wprost z jej fragmentu zapisu: ('E', 'kod LOD/4121/PWBE/19') albo (None, None)."""
+    for m in RE_CODE.finditer(chunk):
+        r = code_role(m.group(1))
+        if r:
+            return r, 'kod ' + re.sub(r'\s', '', m.group(0))
+    for role, rx in ROLE_TXT:
+        if rx.search(chunk):
+            return role, 'opis specjalności'
+    return None, None
+
+
+def assign_electricians(wnioski, people):
+    """Ustawia elektryk_pewny / elektryk_prawdopodobny we wszystkich wnioskach; zwraca listę rozpoznanych elektryków."""
+    from collections import Counter, defaultdict
+    teams, explicit, basis, constraint, display = [], defaultdict(Counter), {}, defaultdict(set), {}
+    for w in wnioski:
+        team = []
+        for name, chunk in split_people(w.get('zespol_zapis')):
             k = name_key(name)
-            if RE_E_CODE.search(chunk) or RE_E_TEXT.search(chunk) or k in self.el_pewni:
-                pewny = pewny or self.el_pewni.get(k) or self.by_name.get(k) or name
-            elif k in self.el_prawdop:
-                prawdop = prawdop or self.el_prawdop[k]
-        if pewny:
-            prawdop = None
-        return pewny, prawdop
+            if not k or k in team:
+                continue
+            display.setdefault(k, people.by_name.get(k) or name)
+            role, why = chunk_role(chunk)
+            if role:
+                explicit[k][role] += 1
+                basis.setdefault((k, role), why)
+            elif RE_INST_INZ.search(chunk):
+                constraint[k] |= {'S', 'E'}
+            team.append(k)
+        teams.append(team)
+
+    known = {k: c.most_common(1)[0][0] for k, c in explicit.items()}
+    inferred, votes = {}, {}
+    for _ in range(4):
+        role_of = lambda k: known.get(k) or inferred.get(k)
+        votes = defaultdict(Counter)
+        for team in teams:
+            for u in team:
+                if u in known:
+                    continue
+                others = {role_of(o) for o in team if o != u and role_of(o)}
+                missing = set(ROLES) - others
+                allowed = (missing & constraint[u]) if constraint[u] else missing
+                if not allowed:
+                    votes[u]['?'] += 1
+                    continue
+                for r in allowed:
+                    votes[u][r] += 1 / len(allowed)
+        new = {}
+        for u, v in votes.items():
+            total = sum(v.values())
+            best = max(ROLES, key=lambda r: v[r])
+            if total >= 1 and v[best] / total >= PROG_ELIMINACJI:
+                new[u] = best
+        if new == inferred:
+            break
+        inferred = new
+
+    for w, team in zip(wnioski, teams):
+        pewny = next((display[k] for k in team if known.get(k) == 'E'), None)
+        prawd = None if pewny else next((display[k] for k in team if inferred.get(k) == 'E'), None)
+        w['elektryk_pewny'], w['elektryk_prawdopodobny'] = pewny, prawd
+        # Czy „brak elektryka” jest wiarygodny? Tylko gdy urząd wpisał branżystów (konstruktor / sanitarny),
+        # a elektryka wśród nich nie ma. Pusty zespół albo sam współautor-architekt = nie wiadomo
+        # (niektóre starostwa, np. wieruszowskie, wpisują tylko głównego projektanta).
+        if pewny or prawd:
+            w['zespol_status'] = 'elektryk'
+        elif any((known.get(k) or inferred.get(k)) in ('K', 'S') for k in team):
+            w['zespol_status'] = 'bez_elektryka'
+        else:
+            w['zespol_status'] = 'nieznany'
+
+    out = []
+    count = Counter(k for t in teams for k in t)
+    for k, r in known.items():
+        if r == 'E':
+            out.append({'osoba': display[k], 'pewnosc': 'pewny', 'podstawa': basis[(k, 'E')], 'wnioski': count[k]})
+    for k, r in inferred.items():
+        if r == 'E':
+            v = votes[k]
+            tot = sum(v.values())
+            out.append({'osoba': display[k], 'pewnosc': 'wywnioskowany', 'wnioski': count[k],
+                        'podstawa': f'stare uprawnienia; w {round(100 * v["E"] / tot)}% swoich zespołów zajmuje miejsce elektryka '
+                                    f'(obok konstruktora/sanitarnego, bez innego elektryka)'})
+    return sorted(out, key=lambda e: -e['wnioski'])
+
+
+# --- kontakty -----------------------------------------------------------------------------------
+
+def merge_contacts(data, people, warnings):
+    """Dopisuje do kart „osoby” kontakty z data/kontakty.csv (telefon, e-mail, www, firma, adres, źródło).
+    Pola wypełnione w xlsx mają pierwszeństwo; brakującą osobę zakłada jako projektanta głównego."""
+    import csv
+    if not KONTAKTY.exists():
+        return
+    by_key = {name_key(o.get('imie_nazwisko')): o for o in data['osoby'] if o.get('imie_nazwisko')}
+    with KONTAKTY.open(encoding='utf-8-sig', newline='') as f:
+        for row in csv.DictReader(f, delimiter=';'):
+            row = {k: (v or '').strip() or None for k, v in row.items() if k}
+            if not row.get('projektant'):
+                continue
+            name = people.canonical(row['projektant'])
+            o = by_key.get(name_key(name))
+            if o is None:
+                o = {'osoba_id': re.sub(r'[^a-z0-9]+', '-', fold(name)).strip('-'), 'imie_nazwisko': name,
+                     'rola': 'projektant główny'}
+                data['osoby'].append(o)
+                by_key[name_key(name)] = o
+            for k in ('firma', 'telefon', 'email', 'www', 'adres'):
+                if row.get(k) and not o.get(k):
+                    o[k] = row[k]
+            if row.get('zrodlo'):
+                o['zrodlo_kontaktu'] = o.get('zrodlo_kontaktu') or row['zrodlo']
+            o['pewnosc_kontaktu'] = row.get('pewnosc')
+            if row.get('pewnosc') == 'niepewne':
+                o['uwagi_kontakt'] = row.get('zrodlo')
 
 
 # --- główny przebieg -----------------------------------------------------------------------------
@@ -171,11 +391,14 @@ def main():
     people = People(wnioski, data['osoby'])
 
     if check:
+        import copy
+        auto = copy.deepcopy(wnioski)
+        assign_electricians(auto, people)
         ok = bad = 0
-        for w in wnioski:
-            p, pr = people.electricians(w.get('zespol_zapis'))
+        for w, a in zip(wnioski, auto):
+            p, pr = a['elektryk_pewny'], a['elektryk_prawdopodobny']
             exp = (w.get('elektryk_pewny'), w.get('elektryk_prawdopodobny'))
-            if (p, pr) == exp:
+            if (p or pr) == (exp[0] or exp[1]):
                 ok += 1
             else:
                 bad += 1
@@ -201,14 +424,13 @@ def main():
                 dup += 1
                 continue
             known.add(r['gunb_id'])
-            r['powiat'] = r.get('powiat') or f.stem.replace('gunb_', '')
+            r['powiat'] = r.get('powiat') or meta.get('powiat') or f.stem.replace('gunb_', '')
             r['projektant'] = people.canonical(r.get('projektant_zapis'), r.get('nr_uprawnien')) if r.get('projektant_zapis') else '(nie wpisano)'
-            r['elektryk_pewny'], r['elektryk_prawdopodobny'] = people.electricians(r.get('zespol_zapis'))
             r['data_pobrania'] = meta.get('data_pobrania')
             r['zrodlo'] = f.name
             wnioski.append(r)
             added += 1
-        for p in {r['powiat'] for r in rows if r.get('powiat')} or {f.stem.replace('gunb_', '')}:
+        for p in {r['powiat'] for r in rows if r.get('powiat')} or {meta.get('powiat') or f.stem.replace('gunb_', '')}:
             m = powiaty_meta.setdefault(p, {'powiat': p, 'pliki': [], 'pominiete': []})
             m['pliki'].append(f.name)
             m['pominiete'] += meta['pominiete']
@@ -232,9 +454,18 @@ def main():
             m.setdefault('zakres_do', d[1])
         if 'baza_zlecenia.xlsx' not in m['pliki']:
             m['pliki'].insert(0, 'baza_zlecenia.xlsx')
+    data['elektrycy'] = assign_electricians(wnioski, people)
+    merge_contacts(data, people, warnings)
     for p, m in powiaty_meta.items():
-        m['wnioski'] = sum(1 for w in wnioski if w.get('powiat') == p)
-
+        lista = [w for w in wnioski if w.get('powiat') == p]
+        m['wnioski'] = len(lista)
+        z_proj = [w for w in lista if w.get('projektant') and w['projektant'] != '(nie wpisano)']
+        znane = sum(1 for w in z_proj if w['zespol_status'] != 'nieznany')
+        # jaka część wniosków ma zespół wpisany na tyle pełno, że wiadomo, czy jest elektryk
+        m['pelnosc_zespolow'] = round(znane / len(z_proj), 3) if z_proj else None
+        if z_proj and znane / len(z_proj) < 0.5:
+            warnings.append(f'powiat {p}: tylko {znane} z {len(z_proj)} wniosków ma wpisanych branżystów – '
+                            f'brak elektryka w zespole NIE oznacza tu wolnego miejsca (traktowane jako „nie wiadomo”)')
     data['powiaty'] = sorted(powiaty_meta.values(), key=lambda m: m['powiat'])
     data['ostrzezenia'] = warnings
     OUT.parent.mkdir(parents=True, exist_ok=True)

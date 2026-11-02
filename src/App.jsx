@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { buildRanking, data, formatDate, POWIATY, wnioskiPowiatu } from './analysis.js'
-import { useKontakty } from './useKontakty.js'
 import Ranking from './components/Ranking.jsx'
 import Wykresy from './components/Wykresy.jsx'
 import Wnioski from './components/Wnioski.jsx'
@@ -9,13 +8,12 @@ import Powiaty from './components/Powiaty.jsx'
 import Szczegoly from './components/Szczegoly.jsx'
 
 const TABS = [
-  ['ranking', 'Do kogo dzwonić'],
+  ['ranking', 'Lista architektów'],
   ['wykresy', 'Wykresy'],
   ['wnioski', 'Wnioski GUNB'],
   ['powiaty', 'Powiaty'],
   ['biura', 'Biura'],
 ]
-const POWIAT_KEY = 'wybrany-powiat-v1'
 
 export default function App() {
   const [tab, setTabState] = useState(() => {
@@ -26,93 +24,61 @@ export default function App() {
     setTabState(k)
     window.history.replaceState(null, '', '#' + k)
   }
-  const [powiat, setPowiatState] = useState(() => {
-    try {
-      const p = localStorage.getItem(POWIAT_KEY) || ''
-      return POWIATY.includes(p) ? p : ''
-    } catch {
-      return ''
-    }
-  })
-  const setPowiat = (p) => {
-    setPowiatState(p)
-    try {
-      localStorage.setItem(POWIAT_KEY, p)
-    } catch {
-      /* bez zapamiętywania */
-    }
-  }
+  const [powiat, setPowiat] = useState('')
 
   const wnioski = useMemo(() => wnioskiPowiatu(powiat), [powiat])
   const ranking = useMemo(() => buildRanking(wnioski), [wnioski])
   const [wybrany, setWybrany] = useState(null)
-  const [kontakty, updateKontakt] = useKontakty()
 
-  const hot = ranking.filter((r) => r.rekomendacja.klasa === 'hot').length
-  const wolne = ranking.reduce((s, r) => s + r.wolne, 0)
-  const bezEl = wnioski.filter((w) => !w.elektryk_pewny && !w.elektryk_prawdopodobny).length
   const wybranyRow = ranking.find((r) => r.name === wybrany) || (wybrany && buildRanking().find((r) => r.name === wybrany))
   const meta = data.powiaty.find((p) => p.powiat === powiat)
+  const dataDo = meta ? meta.data_pobrania : data.powiaty.reduce((m, p) => (p.data_pobrania > m ? p.data_pobrania : m), '')
 
   return (
-    <div className="app">
-      <header className="top">
+    <div className="mx-auto max-w-[1600px] px-4 pb-12 pt-5 sm:px-6">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1>Architekci → projekty elektryczne</h1>
-          <p className="muted">
-            <select className="powiat" value={powiat} onChange={(e) => setPowiat(e.target.value)}>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">Architekci → projekty elektryczne</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+            <select className="input py-1 font-semibold" value={powiat} onChange={(e) => setPowiat(e.target.value)}>
               <option value="">Wszystkie powiaty ({POWIATY.length})</option>
               {data.powiaty.map((p) => (
                 <option key={p.powiat} value={p.powiat}>pow. {p.powiat} ({p.wnioski})</option>
               ))}
-            </select>{' '}
-            rejestr GUNB (RWDZ) ·{' '}
-            {meta ? <>dane z {formatDate(meta.data_pobrania)}</> : <>dane do {formatDate(data.powiaty.reduce((m, p) => (p.data_pobrania > m ? p.data_pobrania : m), ''))}</>}
-          </p>
+            </select>
+            <span>rejestr GUNB (RWDZ) · pobrano {formatDate(dataDo)}</span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+            {(meta ? [meta] : data.powiaty).map((p) => (
+              <span key={p.powiat} className="rounded-md bg-slate-100 px-2 py-0.5 text-slate-600" title="Zakres dat złożenia wniosków, które są w bazie">
+                {!meta && <>pow. {p.powiat}: </>}wnioski złożone{' '}
+                <b className="text-slate-800">{p.zakres_od ? `${formatDate(p.zakres_od)} – ${formatDate(p.zakres_do)}` : 'zakres nieznany'}</b>
+              </span>
+            ))}
+          </div>
         </div>
-        <nav className="tabs">
+        <nav className="flex flex-wrap gap-1 rounded-xl bg-slate-200/70 p-1">
           {TABS.map(([k, label]) => (
-            <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={`rounded-lg px-3.5 py-1.5 text-sm transition ${tab === k ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
               {label}
             </button>
           ))}
         </nav>
       </header>
 
-      <section className="kpis">
-        <Kpi label="Wniosków o pozwolenie (domy)" value={wnioski.length} />
-        <Kpi label="Architektów (projektantów głównych)" value={ranking.length} />
-        <Kpi label="Projektów bez elektryka w zespole" value={bezEl} hint={wnioski.length ? `${Math.round((100 * bezEl) / wnioski.length)}% wszystkich` : ''} />
-        <Kpi label="Projektów nie zaklepanych przez stałego elektryka" value={wolne} />
-        <Kpi label="Architektów z dużą szansą" value={hot} accent />
-      </section>
-
       <main>
-        {tab === 'ranking' && <Ranking ranking={ranking} kontakty={kontakty} onSelect={setWybrany} onStatus={updateKontakt} pokazPowiat={!powiat && POWIATY.length > 1} />}
+        {tab === 'ranking' && <Ranking ranking={ranking} onSelect={setWybrany} />}
         {tab === 'wykresy' && <Wykresy ranking={ranking} wnioski={wnioski} pokazPowiaty={!powiat && POWIATY.length > 1} onSelect={setWybrany} />}
-        {tab === 'wnioski' && <Wnioski wnioski={wnioski} onSelect={setWybrany} pokazPowiat={!powiat && POWIATY.length > 1} />}
+        {tab === 'wnioski' && <Wnioski wnioski={wnioski} onSelect={setWybrany} />}
         {tab === 'powiaty' && <Powiaty onPick={(p) => { setPowiat(p); setTab('ranking') }} />}
         {tab === 'biura' && <Biura />}
       </main>
 
-      {wybranyRow && (
-        <Szczegoly
-          row={wybranyRow}
-          kontakt={kontakty[wybranyRow.id] || {}}
-          onChange={(patch) => updateKontakt(wybranyRow.id, patch)}
-          onClose={() => setWybrany(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-function Kpi({ label, value, hint, accent }) {
-  return (
-    <div className={'kpi' + (accent ? ' accent' : '')}>
-      <div className="kpi-value">{value}</div>
-      <div className="kpi-label">{label}</div>
-      {hint && <div className="kpi-hint">{hint}</div>}
+      {wybranyRow && <Szczegoly row={wybranyRow} onClose={() => setWybrany(null)} />}
     </div>
   )
 }

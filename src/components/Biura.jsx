@@ -1,44 +1,41 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { data } from '../analysis.js'
+import DataGrid from './DataGrid.jsx'
+import { Empty } from './ui.jsx'
 
 const val = (v) => (v && v !== 'brak' ? v : null)
+const jest = (v) => (val(v) ? 'jest' : 'brak')
 
 export default function Biura() {
-  const [q, setQ] = useState('')
-  const [domy, setDomy] = useState(false)
-  const rows = useMemo(() => {
-    const ql = q.trim().toLowerCase()
-    return data.biura
-      .filter((b) => !domy || (b.domy_adaptacje || '').startsWith('tak'))
-      .filter((b) => !ql || [b.firma, b.miejscowosc, b.adres].some((s) => s && s.toLowerCase().includes(ql)))
-  }, [q, domy])
-
-  return (
-    <div className="card">
-      <div className="toolbar">
-        <input placeholder="Szukaj biura lub miejscowości…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <label className="check"><input type="checkbox" checked={domy} onChange={(e) => setDomy(e.target.checked)} /> projektuje domy</label>
-        <span className="muted small">{rows.length} biur</span>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Firma</th><th>Miejscowość</th><th>Telefon</th><th>E-mail</th><th>WWW</th><th>Domy / adaptacje</th></tr>
-          </thead>
-          <tbody>
-            {rows.map((b, i) => (
-              <tr key={i}>
-                <td><strong>{b.firma}</strong><div className="small muted">{val(b.adres)}</div></td>
-                <td>{b.miejscowosc}</td>
-                <td className="nowrap">{val(b.telefon) ? <a href={'tel:' + b.telefon.replace(/\s/g, '')}>{b.telefon}</a> : <span className="muted">—</span>}</td>
-                <td className="small">{val(b.email) ? <a href={'mailto:' + b.email}>{b.email}</a> : <span className="muted">—</span>}</td>
-                <td className="small">{val(b.www) ? <a href={b.www} target="_blank" rel="noreferrer">strona ↗</a> : <span className="muted">—</span>}</td>
-                <td className="small">{b.domy_adaptacje}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+  const columns = useMemo(
+    () => [
+      { key: 'firma', label: 'Firma', filter: 'text', fixed: true, width: 220, get: (b) => b.firma, render: (b) => <span className="font-semibold text-slate-900">{b.firma}</span> },
+      { key: 'miejscowosc', label: 'Miejscowość', filter: 'enum', width: 140, get: (b) => b.miejscowosc },
+      { key: 'adres', label: 'Adres', filter: 'text', width: 200, get: (b) => val(b.adres) || '', render: (b) => <span className="text-xs text-slate-600">{val(b.adres) || <Empty />}</span> },
+      {
+        key: 'telefon', label: 'Telefon', filter: 'enum', options: ['jest', 'brak'], width: 140, stop: true,
+        get: (b) => jest(b.telefon), search: (b) => val(b.telefon) || '', csv: (b) => val(b.telefon) || '',
+        render: (b) => (val(b.telefon) ? <a href={'tel:' + b.telefon.replace(/\s/g, '')}>{b.telefon}</a> : <Empty />),
+      },
+      {
+        key: 'email', label: 'E-mail', filter: 'enum', options: ['jest', 'brak'], width: 140, stop: true,
+        get: (b) => jest(b.email), search: (b) => val(b.email) || '', csv: (b) => val(b.email) || '',
+        render: (b) => (val(b.email) ? <a className="text-xs" href={'mailto:' + b.email}>{b.email}</a> : <Empty />),
+      },
+      {
+        key: 'www', label: 'WWW', filter: 'enum', options: ['jest', 'brak'], width: 90, stop: true,
+        get: (b) => jest(b.www), csv: (b) => val(b.www) || '',
+        render: (b) => (val(b.www) ? <a href={b.www} target="_blank" rel="noreferrer">strona ↗</a> : <Empty />),
+      },
+      {
+        key: 'domy', label: 'Projektuje domy', filter: 'enum', width: 140,
+        get: (b) => ((b.domy_adaptacje || '').startsWith('tak') ? 'tak' : (b.domy_adaptacje || '').startsWith('nie') ? 'nie' : 'brak danych'),
+        search: (b) => b.domy_adaptacje || '', csv: (b) => b.domy_adaptacje || '',
+        render: (b) => <span className="text-xs">{b.domy_adaptacje || <Empty />}</span>,
+      },
+    ],
+    [],
   )
+
+  return <DataGrid columns={columns} rows={data.biura} rowKey={(b) => `${b.nr}-${b.firma}-${b.miejscowosc}`} noun="biur" />
 }
