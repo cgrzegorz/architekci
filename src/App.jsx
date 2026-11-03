@@ -74,7 +74,7 @@ export default function App() {
 
       <main>
         {tab === 'ranking' && <Ranking ranking={ranking} onSelect={setWybrany} />}
-        {tab === 'wykresy' && <Wykresy ranking={ranking} wnioski={wnioski} pokazPowiaty={!powiat && POWIATY.length > 1} onSelect={setWybrany} />}
+        {tab === 'wykresy' && <Wykresy ranking={ranking} wnioski={wnioski} wybranyPowiat={powiat} onSelect={setWybrany} />}
         {tab === 'wnioski' && <Wnioski wnioski={wnioski} onSelect={setWybrany} />}
         {tab === 'powiaty' && <Powiaty onPick={(p) => { setPowiat(p); setTab('ranking') }} />}
         {tab === 'biura' && <Biura />}

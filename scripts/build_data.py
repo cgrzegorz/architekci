@@ -150,9 +150,11 @@ def load_md(path):
             if 'zakres' in low and re.search(r'\d{4}-\d{2}-\d{2}', s) and 'zakres_od' not in meta:
                 d = re.findall(r'\d{4}-\d{2}-\d{2}', s)
                 meta['zakres_od'], meta['zakres_do'] = d[0], (d[1] if len(d) > 1 else d[0])
-            elif 'data pobrania' in low or 'pobrano' in low:
+            elif 'data pobrania' in low or ('pobrano' in low and 'data_pobrania' not in meta):
+                # „Data pobrania danych: …” ma pierwszeństwo; „pobrano” w uwagach (np. „pobrano dwa wyszukiwania:
+                # 2026-01-01–…”) to zakres wyszukiwania, nie data pobrania – nie może jej nadpisać
                 d = re.findall(r'\d{4}-\d{2}-\d{2}', s)
-                if d:
+                if d and ('data pobrania' in low or 'data_pobrania' not in meta):
                     meta['data_pobrania'] = d[0]
             elif re.match(r'^\W*liczba', low) and re.search(r'\d+', s):
                 meta['liczba_deklarowana'] = int(re.search(r'\d+', s.split(':')[-1] or s).group())
@@ -182,7 +184,7 @@ def load_md(path):
                 header = [HDR_MAP.get(k) for k in keys]
                 table_kind = 'skipped' if 'pomini' in section else 'named'
                 continue
-            if keys and keys[0] in ('czesc',):
+            if keys and keys[0] in ('czesc', 'okres'):
                 table_kind = 'ignore'  # tabela podsumowania zakresu – bierzemy z niej tylko „razem”
                 continue
             if 'gunb_id' not in s and len(cells) != len(MD_COLS):
@@ -190,6 +192,11 @@ def load_md(path):
                 continue
             table_kind = 'cols'  # tabela MD_COLS bez nagłówka
         if table_kind == 'ignore':
+            # tabela podsumowania („Część/Okres | Zakres daty złożenia | …”): zakres = od najwcześniejszej do najpóźniejszej daty
+            d = re.findall(r'\d{4}-\d{2}-\d{2}', cells[1]) if len(cells) > 1 else []
+            if len(d) >= 2:
+                t = meta.setdefault('_zakres_tab', [d[0], d[1]])
+                t[0], t[1] = min(t[0], d[0]), max(t[1], d[1])
             if fold(cells[0]) == 'razem':
                 m = re.search(r'\*\*(\d+)\*\*', cells[-1]) or re.search(r'\d+', cells[-1])
                 if m:
@@ -221,6 +228,9 @@ def load_md(path):
             except ValueError:
                 pass
         rows.append(r)
+    t = meta.pop('_zakres_tab', None)
+    if t and 'zakres_od' not in meta:  # brak linii „Zakres: …” → zakres z tabeli podsumowania
+        meta['zakres_od'], meta['zakres_do'] = t
     return meta, rows, warnings
 
 
