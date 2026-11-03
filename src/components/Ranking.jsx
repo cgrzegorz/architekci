@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { formatDate, PARAM } from '../analysis.js'
 import DataGrid from './DataGrid.jsx'
-import { Empty, Niepewne, Stack, StackLegend, Tel, Www } from './ui.jsx'
+import { Empty, Niepewne, Stack, StackLegend, StackSan, Tel, Www } from './ui.jsx'
 
 
 function minusMonths(iso, m) {
@@ -9,6 +9,43 @@ function minusMonths(iso, m) {
   const d = new Date(iso + 'T00:00:00')
   d.setMonth(d.getMonth() - m)
   return d.toISOString().slice(0, 10)
+}
+
+/** Lista „nazwisko … liczba” (3 pierwsze + „+N”), wspólna dla kolumn Elektrycy i Sanitarni. */
+function Osoby({ lista }) {
+  return (
+    <div className="space-y-0.5 text-xs leading-tight">
+      {lista.slice(0, 3).map(([k, n]) => (
+        <div key={k} className="flex justify-between gap-2 whitespace-nowrap"><span>{k}</span><b>{n}</b></div>
+      ))}
+      {lista.length > 3 && <div className="text-slate-400">+{lista.length - 3}</div>}
+    </div>
+  )
+}
+
+/**
+ * Kto robi daną branżę. Gdy urząd nie wpisał zespołu w większości wniosków (pokrycie < PARAM.minPokrycie),
+ * pojedyncze znane nazwiska nic nie mówią o architekcie – wtedy na pierwszym planie „nie wiadomo”, nazwiska wyszarzone.
+ */
+function Kto({ r, lista, pusto }) {
+  const malo = r.pokrycie < PARAM.minPokrycie
+  return (
+    <>
+      {malo ? (
+        <div className="text-xs font-medium text-violet-600">nie wiadomo</div>
+      ) : lista.length ? (
+        <Osoby lista={lista} />
+      ) : (
+        <div className="text-xs text-slate-400">{pusto}</div>
+      )}
+      {r.nNieznany > 0 && (
+        <div className={`text-xs ${malo ? 'text-violet-600' : 'text-slate-400'}`}>bez zespołu: {r.nNieznany} z {r.n}</div>
+      )}
+      {malo && lista.length > 0 && (
+        <div className="text-xs text-slate-400">w znanych: {lista.map(([k, n]) => `${k} (${n})`).join(', ')}</div>
+      )}
+    </>
+  )
 }
 
 const ktoElektryka = (r) =>
@@ -46,7 +83,7 @@ export default function Ranking({ ranking, onSelect }) {
         presets: [1, 3, 6, 12].map((m) => ({ label: `ostatnie ${m} mies.`, value: { min: minusMonths(ref, m), max: '' } })),
       },
       {
-        key: 'miejscowosci', label: 'Miejscowości', filter: 'enum', width: 150,
+        key: 'miejscowosci', label: 'Miejscowości budów', filter: 'enum', width: 150, hidden: true,
         get: (r) => r.miejscowosci,
         render: (r) => (
           <span title={r.miejscowosci.join(', ')}>
@@ -56,25 +93,27 @@ export default function Ranking({ ranking, onSelect }) {
         ),
       },
       { key: 'ost6', label: `Ost. ${PARAM.polowaZycia} mies.`, filter: 'number', num: true, width: 90, firstDir: 'desc', get: (r) => r.ost6 },
-      { key: 'wolne', label: 'Bez stałego el.', filter: 'number', num: true, width: 100, firstDir: 'desc', get: (r) => r.wolne },
       { key: 'domy', label: 'Domów', filter: 'number', num: true, width: 80, firstDir: 'desc', hidden: true, get: (r) => r.domy },
       {
-        key: 'elektryk', label: 'Kto robi elektrykę', filter: 'enum', width: 170,
+        key: 'elektryk', label: 'Elektrycy', filter: 'enum', width: 170,
         get: ktoElektryka,
+        csv: (r) => `${ktoElektryka(r)}: ${r.elektrycy.map(([k, n]) => `${k} ${n}`).join(', ')}`,
+        search: (r) => r.elektrycy.map(([k]) => k),
         render: (r) => (
           <div className="space-y-1">
             <Stack r={r} />
-            <div className="text-xs leading-snug text-slate-600">
-              {r.staly ? <>głównie {r.staly} <span className="text-slate-400">({r.nStaly} z {r.n})</span></> : ktoElektryka(r)}
-              {r.nNieznany > 0 && (
-                <div className={r.pokrycie < PARAM.minPokrycie ? 'text-violet-600' : 'text-slate-400'}>
-                  bez wpisanego zespołu: {r.nNieznany} z {r.n}
-                </div>
-              )}
-              {!r.staly && r.pokrycie < PARAM.minPokrycie && r.elektrycy.length > 0 && (
-                <div className="text-slate-400">w znanych: {r.elektrycy.map(([k, c]) => `${k} (${c})`).join(', ')}</div>
-              )}
-            </div>
+            <Kto r={r} lista={r.elektrycy} pusto={ktoElektryka(r)} />
+          </div>
+        ),
+      },
+      {
+        key: 'sanitarni', label: 'Sanitarni', filter: 'enum', width: 170,
+        get: (r) => r.sanitarni.map(([k]) => k),
+        csv: (r) => r.sanitarni.map(([k, n]) => `${k} ${n}`).join(', '),
+        render: (r) => (
+          <div className="space-y-1" title="Projektanci sanitarni w zespołach architekta i liczba wniosków">
+            <StackSan r={r} />
+            <Kto r={r} lista={r.sanitarni} pusto="nie wpisano" />
           </div>
         ),
       },
@@ -113,9 +152,9 @@ export default function Ranking({ ranking, onSelect }) {
         onRowClick={(r) => onSelect(r.name)}
         noun="architektów"
         footer={
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <div className="flex flex-col gap-2">
             <StackLegend />
-            <span>Kliknij wiersz, żeby zobaczyć projekty. Nagłówek sortuje (drugi klik odwraca, trzeci przywraca domyślną kolejność).</span>
+            <span>Kliknij wiersz, żeby zobaczyć projekty architekta. Kliknięcie nagłówka sortuje: pierwsze – sortuje, drugie – odwraca kolejność, trzecie – przywraca domyślną.</span>
           </div>
         }
       />

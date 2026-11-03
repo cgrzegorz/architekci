@@ -65,6 +65,8 @@ export default function DataGrid({ columns, rows, rowKey, rowClass, onRowClick, 
   const [sort, setSort] = useState(null)
   const [hidden, setHidden] = useState(() => columns.filter((c) => c.hidden).map((c) => c.key))
   const [open, setOpen] = useState(null) // { key, el }
+  const [page, setPage] = useState(0)
+  const [perPage, setPerPage] = useState(10) // 0 = wszystkie
 
   const setFilter = (key, value) => setFilters((f) => ({ ...f, [key]: value }))
   const clearFilter = (key) => setFilters((f) => { const n = { ...f }; delete n[key]; return n })
@@ -94,6 +96,11 @@ export default function DataGrid({ columns, rows, rowKey, rowClass, onRowClick, 
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, columns, q, filters, sort])
+
+  useEffect(() => setPage(0), [rows, q, filters, sort, perPage])
+  const pages = perPage ? Math.max(1, Math.ceil(filtered.length / perPage)) : 1
+  const pg = Math.min(page, pages - 1)
+  const pageRows = perPage ? filtered.slice(pg * perPage, (pg + 1) * perPage) : filtered
 
   const toggleSort = (c) => {
     const first = c.firstDir || 'asc'
@@ -211,7 +218,7 @@ export default function DataGrid({ columns, rows, rowKey, rowClass, onRowClick, 
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => (
+            {pageRows.map((r) => (
               <tr key={rowKey(r)} className={`group ${onRowClick ? 'cursor-pointer' : ''}`} onClick={() => onRowClick?.(r)}>
                 {visible.map((c, i) => (
                   <td
@@ -229,6 +236,28 @@ export default function DataGrid({ columns, rows, rowKey, rowClass, onRowClick, 
         {!filtered.length && (
           <div className="px-4 py-10 text-center text-slate-500">
             Nic nie pasuje do filtrów. <button className="link" onClick={clearAll}>Wyczyść filtry</button>
+          </div>
+        )}
+      </div>
+      {/* paginacja */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-4 py-2 text-sm text-slate-600">
+        <span>
+          {filtered.length ? <>{pg * (perPage || 0) + 1}–{perPage ? Math.min((pg + 1) * perPage, filtered.length) : filtered.length} z {filtered.length}</> : '0 z 0'}
+        </span>
+        <label className="ml-2 flex items-center gap-1.5 text-xs text-slate-500">
+          na stronie
+          <select className="input py-0.5 text-xs" value={perPage} onChange={(e) => setPerPage(Number(e.target.value))}>
+            {[5, 10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+            <option value={0}>wszystkie</option>
+          </select>
+        </label>
+        {pages > 1 && (
+          <div className="ml-auto flex items-center gap-1">
+            <button className="btn px-2 py-1 disabled:opacity-40" disabled={pg === 0} onClick={() => setPage(0)} aria-label="Pierwsza strona">«</button>
+            <button className="btn px-2 py-1 disabled:opacity-40" disabled={pg === 0} onClick={() => setPage(pg - 1)} aria-label="Poprzednia strona">‹</button>
+            <span className="px-2 tabular-nums">strona <b className="text-slate-900">{pg + 1}</b> z {pages}</span>
+            <button className="btn px-2 py-1 disabled:opacity-40" disabled={pg >= pages - 1} onClick={() => setPage(pg + 1)} aria-label="Następna strona">›</button>
+            <button className="btn px-2 py-1 disabled:opacity-40" disabled={pg >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Ostatnia strona">»</button>
           </div>
         )}
       </div>

@@ -23,7 +23,7 @@ do których architektów warto zadzwonić z ofertą projektów elektrycznych.
 
 ## Algorytm
 Liczony wyłącznie z wniosków GUNB – ręczne kolumny elektryka, priorytety i notatki z xlsx są ignorowane.
-1. **Elektryk w zespole** (`scripts/build_data.py`): kod specjalności w uprawnieniach (…/PWBE/…) lub opis → pewny;
+1. **Elektryk w zespole** (`scripts/build_data.py`): kod specjalności w uprawnieniach (…/PWBE/…, też starsza kolejność ŁOD/IE/3664/03) lub opis → pewny;
    stare uprawnienia bez kodu → eliminacja (kto w swoich zespołach stoi obok konstruktora i sanitarnego, a nie obok elektryka).
    `npm run data:check` porównuje wynik z ręcznym opisem (obecnie 262/263 zgodnych).
    **Zespół niewpisany:** nie każde starostwo wpisuje branżystów (wieruszowskie: ok. 6% wniosków). Wniosek bez elektryka to
@@ -40,6 +40,8 @@ wyszukiwarkę, wybór kolumn i eksport widoku do CSV. Strona jest statyczna – 
 - **Wykresy** – top 15, mapa okazji, wnioski miesięcznie, udział elektryków, miejscowości.
 - **Wnioski GUNB** – pełna lista wniosków.
 - **Powiaty** – zestawienie powiatów, pominięte wnioski, uwagi z importu.
+- **Sanitarni** – projektanci sanitarni z zespołów (pewni: kod …S/ lub opis; wywnioskowani: stare uprawnienia, eliminacja),
+  liczba wniosków, z którymi architektami pracują, kontakty z karty „osoby”. Lista w `baza.json`: `sanitarni`, we wniosku pole `sanitarny`.
 - **Biura** – kontakty do biur projektowych.
 
 Wygląd: Tailwind CSS (`tailwind.config.js`, wspólne klasy w `src/styles.css`, drobne komponenty w `src/components/ui.jsx`).

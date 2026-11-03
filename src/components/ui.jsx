@@ -50,13 +50,34 @@ export function Stack({ r, className = 'h-2 w-28' }) {
   )
 }
 
+/** Pasek sanitarnych: najczęstszy / inni / nie wpisano sanitarnego. */
+export function StackSan({ r, className = 'h-2 w-28' }) {
+  const glowny = r.sanitarni[0]?.[1] || 0
+  const inni = r.sanitarni.slice(1).reduce((s, [, n]) => s + n, 0)
+  return (
+    <div className={`flex overflow-hidden rounded-full bg-slate-100 ${className}`} title={`najczęstszy: ${glowny}, inni: ${inni}, bez sanitarnego w zespole: ${r.n - glowny - inni} (z ${r.n})`}>
+      <div className="bg-staly" style={{ width: (100 * glowny) / r.n + '%' }} />
+      <div className="bg-warm" style={{ width: (100 * inni) / r.n + '%' }} />
+    </div>
+  )
+}
+
 export function StackLegend() {
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-      <span><i className="dot bg-staly" /> stały elektryk</span>
-      <span><i className="dot bg-warm" /> inni elektrycy</span>
-      <span><i className="dot bg-hot" /> bez elektryka</span>
-      <span><i className="dot bg-unk/50" /> nie wiadomo (urząd nie wpisał zespołu)</span>
+    <span className="inline-flex flex-col gap-1">
+      <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+        <b className="text-slate-600">Pasek „Elektrycy”:</b>
+        <span><i className="dot bg-staly" /> stały elektryk architekta</span>
+        <span><i className="dot bg-warm" /> inni elektrycy</span>
+        <span><i className="dot bg-hot" /> zespół bez elektryka</span>
+        <span><i className="dot bg-unk/50" /> nie wiadomo (urząd nie wpisał zespołu)</span>
+      </span>
+      <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+        <b className="text-slate-600">Pasek „Sanitarni”:</b>
+        <span><i className="dot bg-staly" /> najczęstszy sanitarny</span>
+        <span><i className="dot bg-warm" /> inni sanitarni</span>
+        <span><i className="dot bg-slate-200" /> brak sanitarnego w zespole lub nie wpisano</span>
+      </span>
     </span>
   )
 }

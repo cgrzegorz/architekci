@@ -50,6 +50,21 @@ def upr_key(nr):
     return re.sub(r'[^0-9a-z]', '', nr)
 
 
+RE_CAPS = re.compile(r'(?<![/\w])([A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?)(?![/\w])')
+# „NAZWISKO Imię” / „NAZWISKO imię” (np. powiat oleski) – nazwisko wielkimi przed imieniem
+RE_CAPS_FIRST = re.compile(r'(?<![/\w])([A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?)\s+'
+                           r'([A-ZĄĆĘŁŃÓŚŹŻa-ząćęłńóśźż][a-ząćęłńóśźż]+)(?![/\w])')
+
+
+def fix_case(s):
+    """„Aneta MOSTOWSKA” → „Aneta Mostowska”; „DITTMANN Natalia” → „Natalia Dittmann”. Kody przy ukośnikach bez zmian."""
+    if not s:
+        return s
+    cap = lambda t: '-'.join(p.capitalize() for p in t.split('-'))
+    s = RE_CAPS_FIRST.sub(lambda m: f'{m.group(2).capitalize()} {cap(m.group(1))}', s)
+    return RE_CAPS.sub(lambda m: cap(m.group(1)), s)
+
+
 # Kod specjalności w nowych uprawnieniach: LOD/4121/PWBE/19, KUP/0090/POE/20, DOŚ/0478/PBE/19 …
 RE_E_CODE = re.compile(r'\b[A-ZĄĆĘŁŃÓŚŹŻ]{2,4}\s*/\s*\d{2,5}\s*/\s*P[A-Z]{0,3}E\s*/\s*\d{2}\b')
 RE_E_TEXT = re.compile(r'elektry|elektroenerget', re.I)
@@ -63,8 +78,7 @@ def split_people(zespol):
     if not zespol or zespol.strip().lower() in ('brak', '-'):
         return []
     # „PAWEŁ ROSIAK, 955/91” → „Paweł Rosiak, 955/91” (kody uprawnień przy ukośnikach zostają bez zmian)
-    zespol = re.sub(r'(?<![/\w])([A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?)(?![/\w])',
-                    lambda m: '-'.join(p.capitalize() for p in m.group(1).split('-')), zespol)
+    zespol = fix_case(zespol)
     starts = [m for m in RE_NAME.finditer(zespol) if m.group(1) not in STOP and m.group(2) not in STOP]
     # odrzuć dopasowania wewnątrz opisu specjalności (np. „Nr. 937/90, - Jarosław …” jest OK, „Sieci Sanitarnych” nie)
     starts = [m for m in starts if not re.search(r'(specjalno|zakres|instalac|urządze|sieci)\S*\s*$', zespol[max(0, m.start() - 25):m.start()], re.I)]
@@ -232,7 +246,7 @@ class People:
         if k in self.by_name:
             return self.by_name[k]
         # nieznana osoba: zapis „Nazwisko Imię” zostawiamy jak jest, ale rejestrujemy, żeby kolejne zapisy się łączyły
-        clean = re.sub(r'\s+', ' ', re.sub(r'(?<!\w)(mgr|inż|arch|dr|tech|bud)\.?(?!\w)|,', ' ', name or '', flags=re.I)).strip()
+        clean = re.sub(r'\s+', ' ', re.sub(r'(?<!\w)(mgr|inż|arch|dr|tech|bud)\.?(?!\w)|,', ' ', fix_case(name) or '', flags=re.I)).strip()
         self.by_name[k] = clean
         if upr:
             self.by_upr[upr_key(upr)] = clean
@@ -242,7 +256,9 @@ class People:
 
 # --- specjalności w zespole: kod uprawnień → opis → eliminacja ---------------------------------------
 
-RE_CODE = re.compile(r'\b[A-ZĄĆĘŁŃÓŚŹŻ]{2,4}\s*/\s*\d{2,5}\s*/\s*([A-Za-z]{2,6})\s*/\s*\d{2}\b')
+RE_CODE = re.compile(r'\b[A-ZĄĆĘŁŃÓŚŹŻ]{2,4}\s*/\s*\d{2,5}\s*/\s*([A-Za-z]{2,6})\s*/\s*\d{2}\b'
+                     # starsza kolejność: ŁOD/IE/3664/03, OPL/IS/1563/01 (specjalność przed numerem)
+                     r'|\b[A-ZĄĆĘŁŃÓŚŹŻ]{2,4}\s*/\s*([A-Za-z]{2,6})\s*/\s*\d{2,5}\s*/\s*\d{2}\b')
 ROLE_TXT = [
     ('E', re.compile(r'elektry|elektroenerget', re.I)),
     ('S', re.compile(r'sanitar|ciepln|wentyl|gazow|wodoci|kanaliz', re.I)),
@@ -266,7 +282,7 @@ def code_role(token):
 def chunk_role(chunk):
     """Rola osoby wprost z jej fragmentu zapisu: ('E', 'kod LOD/4121/PWBE/19') albo (None, None)."""
     for m in RE_CODE.finditer(chunk):
-        r = code_role(m.group(1))
+        r = code_role(m.group(1) or m.group(2))
         if r:
             return r, 'kod ' + re.sub(r'\s', '', m.group(0))
     for role, rx in ROLE_TXT:
@@ -276,7 +292,8 @@ def chunk_role(chunk):
 
 
 def assign_electricians(wnioski, people):
-    """Ustawia elektryk_pewny / elektryk_prawdopodobny we wszystkich wnioskach; zwraca listę rozpoznanych elektryków."""
+    """Ustawia elektryk_pewny / elektryk_prawdopodobny oraz sanitarny / sanitarny_pewnosc we wszystkich wnioskach;
+    zwraca (lista elektryków, lista sanitarnych)."""
     from collections import Counter, defaultdict
     teams, explicit, basis, constraint, display = [], defaultdict(Counter), {}, defaultdict(set), {}
     for w in wnioski:
@@ -326,6 +343,9 @@ def assign_electricians(wnioski, people):
         pewny = next((display[k] for k in team if known.get(k) == 'E'), None)
         prawd = None if pewny else next((display[k] for k in team if inferred.get(k) == 'E'), None)
         w['elektryk_pewny'], w['elektryk_prawdopodobny'] = pewny, prawd
+        san = next((k for k in team if known.get(k) == 'S'), None) or next((k for k in team if inferred.get(k) == 'S'), None)
+        w['sanitarny'] = display[san] if san else None
+        w['sanitarny_pewnosc'] = (('pewny' if known.get(san) == 'S' else 'wywnioskowany') if san else None)
         # Czy „brak elektryka” jest wiarygodny? Tylko gdy urząd wpisał branżystów (konstruktor / sanitarny),
         # a elektryka wśród nich nie ma. Pusty zespół albo sam współautor-architekt = nie wiadomo
         # (niektóre starostwa, np. wieruszowskie, wpisują tylko głównego projektanta).
@@ -336,19 +356,25 @@ def assign_electricians(wnioski, people):
         else:
             w['zespol_status'] = 'nieznany'
 
-    out = []
     count = Counter(k for t in teams for k in t)
-    for k, r in known.items():
-        if r == 'E':
-            out.append({'osoba': display[k], 'pewnosc': 'pewny', 'podstawa': basis[(k, 'E')], 'wnioski': count[k]})
-    for k, r in inferred.items():
-        if r == 'E':
-            v = votes[k]
-            tot = sum(v.values())
-            out.append({'osoba': display[k], 'pewnosc': 'wywnioskowany', 'wnioski': count[k],
-                        'podstawa': f'stare uprawnienia; w {round(100 * v["E"] / tot)}% swoich zespołów zajmuje miejsce elektryka '
-                                    f'(obok konstruktora/sanitarnego, bez innego elektryka)'})
-    return sorted(out, key=lambda e: -e['wnioski'])
+    opis = {'E': ('elektryka', 'konstruktora/sanitarnego', 'elektryka'), 'S': ('sanitarnego', 'konstruktora/elektryka', 'sanitarnego')}
+
+    def lista(role):
+        out = []
+        for k, r in known.items():
+            if r == role:
+                out.append({'osoba': display[k], 'pewnosc': 'pewny', 'podstawa': basis[(k, role)], 'wnioski': count[k]})
+        for k, r in inferred.items():
+            if r == role:
+                v = votes[k]
+                tot = sum(v.values())
+                miejsce, obok, inny = opis[role]
+                out.append({'osoba': display[k], 'pewnosc': 'wywnioskowany', 'wnioski': count[k],
+                            'podstawa': f'stare uprawnienia; w {round(100 * v[role] / tot)}% swoich zespołów zajmuje miejsce {miejsce} '
+                                        f'(obok {obok}, bez innego {inny})'})
+        return sorted(out, key=lambda e: -e['wnioski'])
+
+    return lista('E'), lista('S')
 
 
 # --- kontakty -----------------------------------------------------------------------------------
@@ -454,7 +480,7 @@ def main():
             m.setdefault('zakres_do', d[1])
         if 'baza_zlecenia.xlsx' not in m['pliki']:
             m['pliki'].insert(0, 'baza_zlecenia.xlsx')
-    data['elektrycy'] = assign_electricians(wnioski, people)
+    data['elektrycy'], data['sanitarni'] = assign_electricians(wnioski, people)
     merge_contacts(data, people, warnings)
     for p, m in powiaty_meta.items():
         lista = [w for w in wnioski if w.get('powiat') == p]

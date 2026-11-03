@@ -4,6 +4,7 @@ import Ranking from './components/Ranking.jsx'
 import Wykresy from './components/Wykresy.jsx'
 import Wnioski from './components/Wnioski.jsx'
 import Biura from './components/Biura.jsx'
+import Sanitarni from './components/Sanitarni.jsx'
 import Powiaty from './components/Powiaty.jsx'
 import Szczegoly from './components/Szczegoly.jsx'
 
@@ -11,6 +12,7 @@ const TABS = [
   ['ranking', 'Lista architektów'],
   ['wykresy', 'Wykresy'],
   ['wnioski', 'Wnioski GUNB'],
+  ['sanitarni', 'Sanitarni'],
   ['powiaty', 'Powiaty'],
   ['biura', 'Biura'],
 ]
@@ -76,6 +78,7 @@ export default function App() {
         {tab === 'wnioski' && <Wnioski wnioski={wnioski} onSelect={setWybrany} />}
         {tab === 'powiaty' && <Powiaty onPick={(p) => { setPowiat(p); setTab('ranking') }} />}
         {tab === 'biura' && <Biura />}
+        {tab === 'sanitarni' && <Sanitarni wnioski={wnioski} />}
       </main>
 
       {wybranyRow && <Szczegoly row={wybranyRow} onClose={() => setWybrany(null)} />}

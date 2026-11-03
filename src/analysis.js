@@ -165,6 +165,8 @@ export function buildRanking(wnioski = baza.wnioski) {
       // gdzie (w którym starostwie) składa wnioski: [[powiat, liczba], …] od największej
       powiatyN: [...lista.reduce((m, w) => (w.powiat ? m.set(w.powiat, (m.get(w.powiat) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]),
       miejscowosci: [...new Set(lista.map((w) => w.miejscowosc).filter(Boolean))],
+      // projektanci sanitarni w zespołach architekta: [[osoba, liczba], …] od najczęstszego
+      sanitarni: [...lista.reduce((m, w) => (w.sanitarny ? m.set(w.sanitarny, (m.get(w.sanitarny) || 0) + 1) : m), new Map())].sort((a, b) => b[1] - a[1]),
     })
   }
 
